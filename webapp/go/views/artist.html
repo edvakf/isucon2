@@ -1,0 +1,10 @@
+{{template "layoutTop" .}}
+<h2>{{.artist.Name}}</h2>
+<ul>
+  {{range .tickets}}
+  <li class="ticket">
+    <a href="/ticket/{{.ID}}">{{.Name}}</a>残り<span class="count">{{.Count}}</span>枚
+  </li>
+  {{end}}
+</ul>
+{{template "layoutBottom" .}}

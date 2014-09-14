@@ -1,0 +1,12 @@
+{{template "layoutTop" .}}
+<h1>TOP</h1>
+<ul>
+  {{range .artists}}
+  <li>
+    <a href="/artist/{{.ID}}">
+      <span class="artist_name">{{.Name}}</span>
+    </a>
+  </li>
+  {{end}}
+</ul>
+{{template "layoutBottom" .}}
