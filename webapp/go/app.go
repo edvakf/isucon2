@@ -42,7 +42,6 @@ var RecentSoldList = make([]RecentSold, 10)
 var RecentSoldListLen = 0
 
 var rsMutex *sync.RWMutex
-var seatCacheMutex *sync.RWMutex
 
 func main() {
 	flag.Parse()
@@ -50,7 +49,6 @@ func main() {
 	initTmpl()
 
 	rsMutex = &sync.RWMutex{}
-	seatCacheMutex = &sync.RWMutex{}
 
 	serveHTTP()
 }
@@ -178,7 +176,6 @@ type OrderRequestCSV struct {
 type SeatMapCache struct {
 	VariationID uint
 	Content     template.HTML
-	ExpireAt    int64
 }
 
 func (csv OrderRequestCSV) ToLine() string {
@@ -368,22 +365,16 @@ WHERE t.id = ? LIMIT 1`, ticketid)
 	seatMaps := make([]template.HTML, len(variations))
 	for i, variation := range variations {
 		key := fmt.Sprintf("seat_map_cahce_of_%d", variation.ID)
-		seatCacheMutex.RLock()
 		v, found := gocache.Get(key)
 		var seatCache SeatMapCache
-		if v != nil {
-			seatCache = v.(SeatMapCache)
-		}
-		seatCacheMutex.RUnlock()
 
-		if found && v != nil && seatCache.ExpireAt > time.Now().Unix() {
+		if found {
+			seatCache = v.(SeatMapCache)
 			seatMaps[i] = seatCache.Content
 		} else {
 			seatCache := generateSeatMapCache(variation)
 			seatMaps[i] = seatCache.Content
-			seatCacheMutex.Lock()
-			gocache.Set(key, seatCache, 0)
-			seatCacheMutex.Unlock()
+			gocache.Set(key, seatCache, 2*time.Second)
 		}
 	}
 
@@ -404,7 +395,6 @@ func generateSeatMapCache(variation VariationWithStocks) SeatMapCache {
 	var cache SeatMapCache
 	cache.VariationID = variation.ID
 	cache.Content = template.HTML(doc.String())
-	cache.ExpireAt = time.Now().Unix() + 10
 	SeatMapCacheOf[variation.ID] = cache
 	return cache
 }
@@ -446,9 +436,7 @@ UPDATE stock SET order_id = ?
 	}
 
 	key := fmt.Sprintf("seat_map_cahce_of_%d", variationid)
-	seatCacheMutex.Lock()
 	gocache.Delete(key)
-	seatCacheMutex.Unlock()
 
 	aff, err := res.RowsAffected()
 	if err != nil {
