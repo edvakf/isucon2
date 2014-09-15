@@ -41,7 +41,6 @@ func serveHTTP() {
 	r.HandleFunc("/", indexHandler).Methods("GET")
 	r.HandleFunc("/artist/{artistid:[0-9]+}", artistHandler).Methods("GET")
 	r.HandleFunc("/ticket/{ticketid:[0-9]+}", ticketHandler).Methods("GET")
-	r.HandleFunc("/ticket/{ticketid:[0-9]+}", ticketHandler).Methods("GET")
 	r.HandleFunc("/buy", buyHandler).Methods("POST")
 	r.HandleFunc("/admin", adminHandler).Methods("GET")
 	r.HandleFunc("/admin/order.csv", adminOrderHandler).Methods("GET")
