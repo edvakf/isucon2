@@ -22,7 +22,7 @@
     {{range $i, $row := .Stocks}}
     <tr>
       {{range $j, $stock := $row}}
-      <td id="{{$i}}-{{$j}}" class="{{if $stock.OrderID.Valid}}unavailable{{else}}available{{end}}"></td>
+      <td id="{{$i | printf "%02d" }}-{{$j | printf "%02d"}}" class="{{if $stock.OrderID.Valid}}unavailable{{else}}available{{end}}"></td>
       {{end}}
     </tr>
     {{end}}
