@@ -42,6 +42,7 @@ var RecentSoldList = make([]RecentSold, 10)
 var RecentSoldListLen = 0
 
 var rsMutex *sync.RWMutex
+var seatCacheMutex *sync.RWMutex
 
 func main() {
 	flag.Parse()
@@ -49,6 +50,7 @@ func main() {
 	initTmpl()
 
 	rsMutex = &sync.RWMutex{}
+	seatCacheMutex = &sync.RWMutex{}
 
 	serveHTTP()
 }
@@ -366,11 +368,13 @@ WHERE t.id = ? LIMIT 1`, ticketid)
 	seatMaps := make([]template.HTML, len(variations))
 	for i, variation := range variations {
 		key := fmt.Sprintf("seat_map_cahce_of_%d", variation.ID)
+		seatCacheMutex.RLock()
 		v, found := gocache.Get(key)
 		var seatCache SeatMapCache
 		if v != nil {
 			seatCache = v.(SeatMapCache)
 		}
+		seatCacheMutex.RUnlock()
 
 		if found && v != nil && seatCache.ExpireAt > time.Now().Unix() {
 			seatMaps[i] = seatCache.Content
@@ -378,7 +382,9 @@ WHERE t.id = ? LIMIT 1`, ticketid)
 			seatCache := generateSeatMapCache(variation)
 			seatMaps[i] = seatCache.Content
 			go func() {
+				seatCacheMutex.Lock()
 				gocache.Set(key, seatCache, 0)
+				seatCacheMutex.Unlock()
 			}()
 		}
 	}
