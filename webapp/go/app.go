@@ -59,6 +59,10 @@ func serveHTTP() {
 	var l net.Listener
 	var err error
 	if *port == 0 {
+		ferr := os.Remove("/tmp/server.sock")
+		if ferr != nil {
+			panic(ferr.Error())
+		}
 		l, err = net.Listen("unix", "/tmp/server.sock")
 	} else {
 		l, err = net.ListenTCP("tcp", &net.TCPAddr{Port: int(*port)})
