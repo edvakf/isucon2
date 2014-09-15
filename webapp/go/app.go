@@ -304,6 +304,44 @@ WHERE t.id = ? LIMIT 1`, ticketid)
 	}
 	//log.Printf("%+v", ticket)
 
+	variations := []VariationWithStocks{}
+	err = db.Select(&variations,
+		`SELECT id, name FROM variation WHERE ticket_id = ? ORDER BY id`, ticketid)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	//log.Printf("%+v", variations)
+
+	for i := 0; i < len(variations); i++ {
+		v := &variations[i]
+		err := db.Get(&v.Count,
+			`SELECT COUNT(*) AS cnt FROM stock WHERE variation_id = ? AND order_id IS NULL`, v.ID)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		//log.Printf("%+v", v.Count)
+
+		stocks := []Stock{}
+		err = db.Select(&stocks,
+			`SELECT seat_id, order_id FROM stock WHERE variation_id = ?`, v.ID)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		//log.Printf("%+v", stocks)
+		for _, stock := range stocks {
+			if stock.OrderID.Valid {
+				//log.Printf("%+v", stock)
+			}
+			m := regexp.MustCompile(`(\d+)-(\d+)`).FindStringSubmatch(stock.SeatID)
+			row, _ := strconv.Atoi(m[1])
+			col, _ := strconv.Atoi(m[2])
+			v.Stocks[row][col] = stock
+		}
+	}
+
 	var zaseki template.HTML;
 	recents, err := getRecentSold()
 	if err != nil {
@@ -315,44 +353,6 @@ WHERE t.id = ? LIMIT 1`, ticketid)
 	if ( ok && cache.ExpireAt >= time.Now().Unix() ) {
 		zaseki = cache.Content
 	} else {
-		variations := []VariationWithStocks{}
-		err = db.Select(&variations,
-			`SELECT id, name FROM variation WHERE ticket_id = ? ORDER BY id`, ticketid)
-		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		//log.Printf("%+v", variations)
-
-		for i := 0; i < len(variations); i++ {
-			v := &variations[i]
-			err := db.Get(&v.Count,
-				`SELECT COUNT(*) AS cnt FROM stock WHERE variation_id = ? AND order_id IS NULL`, v.ID)
-			if err != nil {
-				http.Error(w, err.Error(), 500)
-				return
-			}
-			//log.Printf("%+v", v.Count)
-
-			stocks := []Stock{}
-			err = db.Select(&stocks,
-				`SELECT seat_id, order_id FROM stock WHERE variation_id = ?`, v.ID)
-			if err != nil {
-				http.Error(w, err.Error(), 500)
-				return
-			}
-			//log.Printf("%+v", stocks)
-			for _, stock := range stocks {
-				if stock.OrderID.Valid {
-					//log.Printf("%+v", stock)
-				}
-				m := regexp.MustCompile(`(\d+)-(\d+)`).FindStringSubmatch(stock.SeatID)
-				row, _ := strconv.Atoi(m[1])
-				col, _ := strconv.Atoi(m[2])
-				v.Stocks[row][col] = stock
-			}
-		}
-
 		fmt.Println("expired!!!")
 		var doc bytes.Buffer
 		tmpl.ExecuteTemplate(&doc, "zaseki.html", map[string]interface{}{
@@ -362,7 +362,7 @@ WHERE t.id = ? LIMIT 1`, ticketid)
 		cache.TicketID = ticket.Ticket.ID
 		cache.Content = template.HTML(doc.String())
 		zaseki = cache.Content
-		cache.ExpireAt = time.Now().Unix() + 1
+		cache.ExpireAt = time.Now().Unix() + 10
 		SeatMapCacheOf[ticket.Ticket.ID] = cache
 	}
 
@@ -370,6 +370,7 @@ WHERE t.id = ? LIMIT 1`, ticketid)
 		"recents":    recents,
 		"ticket":     ticket,
 		"zaseki":     zaseki,
+		"variations": variations,
 	})
 }
 
