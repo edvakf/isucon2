@@ -376,7 +376,7 @@ func generateSeatMapCache(variation VariationWithStocks) SeatMapCache {
 	var cache SeatMapCache
 	cache.VariationID = variation.ID
 	cache.Content = template.HTML(doc.String())
-	cache.ExpireAt = time.Now().Unix() + 1
+	cache.ExpireAt = time.Now().Unix() + 10
 	SeatMapCacheOf[variation.ID] = cache
 	return cache
 }
