@@ -385,6 +385,11 @@ func buyHandler(w http.ResponseWriter, r *http.Request) {
 	memberid := r.PostFormValue("member_id")
 	variationid := r.PostFormValue("variation_id")
 	//log.Printf("memberid: %s, variationid: %s", memberid, variationid)
+	variationId, err := strconv.Atoi(variationid)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
 
 	tx, err := db.Beginx()
 	if err != nil {
@@ -438,6 +443,11 @@ UPDATE stock SET order_id = ?
 		return
 	}
 	tx.Commit()
+
+	v, ok := SeatMapCacheOf[uint(variationId)]
+	if ok {
+		v.ExpireAt = 0
+	}
 
 	tmpl.ExecuteTemplate(w, "complete.html", map[string]interface{}{
 		"seatid":   seatid,
