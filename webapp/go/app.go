@@ -439,6 +439,9 @@ UPDATE stock SET order_id = ?
 		return
 	}
 
+	key := fmt.Sprintf("seat_map_cahce_of_%d", variationid)
+	gocache.Delete(key)
+
 	aff, err := res.RowsAffected()
 	if err != nil {
 		tx.Rollback()
@@ -460,9 +463,6 @@ UPDATE stock SET order_id = ?
 		return
 	}
 	tx.Commit()
-
-	key := fmt.Sprintf("seat_map_cahce_of_%d", variationid)
-	gocache.Delete(key)
 
 	vid, _ := strconv.Atoi(variationid)
 	vid = vid
