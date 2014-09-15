@@ -1,0 +1,12 @@
+{{range .variations}}
+  <h4>{{.Name}}</h4>
+  <table class="seats" data-variationid="{{.ID}}">
+    {{range $i, $row := .Stocks}}
+    <tr>
+      {{range $j, $stock := $row}}
+      <td id="{{$i}}-{{$j}}" class="{{if $stock.OrderID.Valid}}unavailable{{else}}available{{end}}"></td>
+      {{end}}
+    </tr>
+    {{end}}
+  </table>
+{{end}}

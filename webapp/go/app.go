@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/mux"
@@ -24,12 +25,17 @@ var db *sqlx.DB
 var tmpl *template.Template
 var port = flag.Uint("port", 5000, "port to listen")
 var appDir = flag.String("appdir", ".", "the directory where public & views directories are located")
+var SeatMapCacheOf = make(map[uint]SeatMapCache, 100)
+
 
 func main() {
 	flag.Parse()
 	connectDB()
 	initTmpl()
 	serveHTTP()
+}
+
+func init() {
 }
 
 func getAppDir() string {
@@ -123,6 +129,12 @@ type OrderRequestCSV struct {
 	VariationID uint   `db:"variation_id"`
 	SeatID      string `db:"seat_id"`
 	UpdatedAt   string `db:"updated_at"`
+}
+
+type SeatMapCache struct {
+	TicketID	uint
+	Content		template.HTML
+	ExpireAt	int64
 }
 
 func (csv OrderRequestCSV) ToLine() string {
@@ -294,15 +306,34 @@ WHERE t.id = ? LIMIT 1`, ticketid)
 		}
 	}
 
+	var zaseki template.HTML;
 	recents, err := getRecentSold()
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
 
+	cache, ok := SeatMapCacheOf[ticket.Ticket.ID]
+	if ( ok && cache.ExpireAt >= time.Now().Unix() ) {
+		zaseki = cache.Content
+	} else {
+		fmt.Println("expired!!!")
+		var doc bytes.Buffer
+		tmpl.ExecuteTemplate(&doc, "zaseki.html", map[string]interface{}{
+			"variations": variations,
+		})
+		var cache SeatMapCache
+		cache.TicketID = ticket.Ticket.ID
+		cache.Content = template.HTML(doc.String())
+		zaseki = cache.Content
+		cache.ExpireAt = time.Now().Unix() + 10
+		SeatMapCacheOf[ticket.Ticket.ID] = cache
+	}
+
 	tmpl.ExecuteTemplate(w, "ticket.html", map[string]interface{}{
 		"recents":    recents,
 		"ticket":     ticket,
+		"zaseki":     zaseki,
 		"variations": variations,
 	})
 }
