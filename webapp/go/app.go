@@ -7,10 +7,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	_ "github.com/go-sql-driver/mysql"
-	"github.com/gorilla/mux"
-	"github.com/jmoiron/sqlx"
-	"github.com/pmylund/go-cache"
 	"html/template"
 	"io"
 	"log"
@@ -21,8 +17,14 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
+
+	_ "github.com/go-sql-driver/mysql"
+	"github.com/gorilla/mux"
+	"github.com/jmoiron/sqlx"
+	"github.com/pmylund/go-cache"
 )
 
 var db *sqlx.DB
@@ -33,10 +35,22 @@ var mysqlSock = flag.String("mysqlsock", "", "mysql unix socket path")
 var SeatMapCacheOf = make(map[uint]SeatMapCache, 100)
 var c = cache.New(30*time.Second, 10*time.Second)
 
+var ArtistNames = []string{"", "NHN48", "はだいろクローバーZ"}
+var TicketNames = []string{"", "西武ドームライブ", "東京ドームライブ", "さいたまスーパーアリーナライブ", "横浜アリーナライブ", "西武ドームライブ"}
+var VariationNames = []string{"", "アリーナ席", "スタンド席", "アリーナ席", "スタンド席", "アリーナ席", "スタンド席", "アリーナ席", "スタンド席", "アリーナ席", "スタンド席"}
+
+var RecentSoldList = make([]RecentSold, 10)
+var RecentSoldListLen = 0
+
+var rsMutex *sync.RWMutex
+
 func main() {
 	flag.Parse()
 	connectDB()
 	initTmpl()
+
+	rsMutex = &sync.RWMutex{}
+
 	serveHTTP()
 }
 
@@ -161,9 +175,9 @@ type OrderRequestCSV struct {
 }
 
 type SeatMapCache struct {
-	VariationID	uint
-	Content		template.HTML
-	ExpireAt	int64
+	VariationID uint
+	Content     template.HTML
+	ExpireAt    int64
 }
 
 func (csv OrderRequestCSV) ToLine() string {
@@ -210,17 +224,12 @@ func initTmpl() {
 }
 
 func getRecentSold() ([]RecentSold, error) {
-	recents := []RecentSold{}
-	err := db.Select(&recents, `
-SELECT stock.seat_id, variation.name AS v_name, ticket.name AS t_name, artist.name AS a_name FROM stock
-	JOIN variation ON stock.variation_id = variation.id
-	JOIN ticket ON variation.ticket_id = ticket.id
-	JOIN artist ON ticket.artist_id = artist.id
-WHERE order_id IS NOT NULL
-ORDER BY order_id DESC LIMIT 10`)
-	if err != nil {
-		return nil, err
+	rsMutex.RLock()
+	recents := make([]RecentSold, RecentSoldListLen)
+	for i := 0; i < RecentSoldListLen; i++ {
+		recents[i] = RecentSoldList[i]
 	}
+	rsMutex.RUnlock()
 	//log.Printf("%#v", recents)
 	return recents, nil
 }
@@ -355,10 +364,10 @@ WHERE t.id = ? LIMIT 1`, ticketid)
 		return
 	}
 
-	seatMaps := make([]template.HTML, len(variations));
+	seatMaps := make([]template.HTML, len(variations))
 	for i, variation := range variations {
 		cache, ok := SeatMapCacheOf[variation.ID]
-		if ( ok && cache.ExpireAt >= time.Now().Unix() ) {
+		if ok && cache.ExpireAt >= time.Now().Unix() {
 			seatMaps[i] = cache.Content
 		} else {
 			cache := generateSeatMapCache(variation)
@@ -456,6 +465,33 @@ UPDATE stock SET order_id = ?
 		v.ExpireAt = 0
 	}
 
+	vid, _ := strconv.Atoi(variationid)
+	vid = vid
+	tid := (vid + 1) / 2
+	aid := 1
+	if tid >= 3 {
+		aid = 2
+	}
+	//log.Printf("%d %s, %d %s, %d %s", vid, VariationNames[vid], tid, TicketNames[tid], aid, ArtistNames[aid])
+
+	rsMutex.Lock()
+	for i := RecentSoldListLen; i > 0; i-- {
+		if i == 10 {
+			continue
+		}
+		RecentSoldList[i] = RecentSoldList[i-1]
+	}
+	RecentSoldList[0] = RecentSold{
+		SeatID: seatid,
+		VName:  VariationNames[vid],
+		TName:  TicketNames[tid],
+		AName:  ArtistNames[aid],
+	}
+	if RecentSoldListLen < 10 {
+		RecentSoldListLen++
+	}
+	rsMutex.Unlock()
+
 	tmpl.ExecuteTemplate(w, "complete.html", map[string]interface{}{
 		"seatid":   seatid,
 		"memberid": memberid,
@@ -522,5 +558,10 @@ func adminPostHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+
+	rsMutex.Lock()
+	RecentSoldListLen = 0
+	rsMutex.Unlock()
+
 	http.Redirect(w, r, "/admin", 302)
 }
