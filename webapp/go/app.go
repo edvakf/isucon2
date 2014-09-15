@@ -25,7 +25,7 @@ import (
 
 var db *sqlx.DB
 var tmpl *template.Template
-var port = flag.Uint("port", 5000, "port to listen")
+var port = flag.Uint("port", 0, "port to listen")
 var appDir = flag.String("appdir", ".", "the directory where public & views directories are located")
 
 func main() {
@@ -58,7 +58,11 @@ func serveHTTP() {
 
 	var l net.Listener
 	var err error
-	l, err = net.ListenTCP("tcp", &net.TCPAddr{Port: int(*port)})
+	if *port == 0 {
+		l, err = net.Listen("unix", "/tmp/server.sock")
+	} else {
+		l, err = net.ListenTCP("tcp", &net.TCPAddr{Port: int(*port)})
+	}
 	if err != nil {
 		panic(err.Error())
 	}
