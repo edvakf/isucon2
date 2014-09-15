@@ -362,7 +362,7 @@ WHERE t.id = ? LIMIT 1`, ticketid)
 		cache.TicketID = ticket.Ticket.ID
 		cache.Content = template.HTML(doc.String())
 		zaseki = cache.Content
-		cache.ExpireAt = time.Now().Unix() + 10
+		cache.ExpireAt = time.Now().Unix() + 1
 		SeatMapCacheOf[ticket.Ticket.ID] = cache
 	}
 
