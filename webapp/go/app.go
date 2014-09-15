@@ -27,6 +27,7 @@ var db *sqlx.DB
 var tmpl *template.Template
 var port = flag.Uint("port", 0, "port to listen")
 var appDir = flag.String("appdir", ".", "the directory where public & views directories are located")
+var mysqlSock = flag.String("mysqlsock", "", "mysql unix socket path")
 
 func main() {
 	flag.Parse()
@@ -171,8 +172,16 @@ func connectDB() {
 	var err error
 	conf := getConfig()
 	dbConf := conf.Database
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s",
-		dbConf.Username, dbConf.Password, dbConf.Host, dbConf.Port, dbConf.DBname)
+
+	var dsn string
+	if *mysqlSock != "" {
+		dsn = fmt.Sprintf("%s:%s@unix(%s)/%s",
+			dbConf.Username, dbConf.Password, *mysqlSock, dbConf.DBname)
+	} else {
+		dsn = fmt.Sprintf("%s:%s@tcp(%s:%d)/%s",
+			dbConf.Username, dbConf.Password, dbConf.Host, dbConf.Port, dbConf.DBname)
+	}
+
 	db, err = sqlx.Open("mysql", dsn)
 	err = db.Ping()
 	if err != nil {
