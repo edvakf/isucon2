@@ -62,9 +62,12 @@ func serveHTTP() {
 	if *port == 0 {
 		ferr := os.Remove("/tmp/server.sock")
 		if ferr != nil {
-			panic(ferr.Error())
+			if !os.IsNotExist(ferr) {
+				panic(ferr.Error())
+			}
 		}
 		l, err = net.Listen("unix", "/tmp/server.sock")
+		os.Chmod("/tmp/server.sock", 0777)
 	} else {
 		l, err = net.ListenTCP("tcp", &net.TCPAddr{Port: int(*port)})
 	}
