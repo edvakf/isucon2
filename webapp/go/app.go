@@ -376,8 +376,10 @@ WHERE t.id = ? LIMIT 1`, ticketid)
 			seatMaps[i] = seatCache.Content
 		} else {
 			seatCache := generateSeatMapCache(variation)
-			gocache.Set(key, seatCache, 0)
 			seatMaps[i] = seatCache.Content
+			go func() {
+				gocache.Set(key, seatCache, 0)
+			}()
 		}
 	}
 
