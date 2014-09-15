@@ -16,5 +16,7 @@
 </ul>
 
 <h3>席状況</h3>
-{{.zaseki}}
+{{range .seatMaps}}
+  {{.}}
+{{end}}
 {{template "layoutBottom" .}}

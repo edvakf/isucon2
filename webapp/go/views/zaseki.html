@@ -1,12 +1,10 @@
-{{range .variations}}
-  <h4>{{.Name}}</h4>
-  <table class="seats" data-variationid="{{.ID}}">
-    {{range $i, $row := .Stocks}}
-    <tr>
-      {{range $j, $stock := $row}}
-      <td id="{{$i | printf "%02d" }}-{{$j | printf "%02d" }}" class="{{if $stock.OrderID.Valid}}unavailable{{else}}available{{end}}"></td>
-      {{end}}
-    </tr>
-    {{end}}
-  </table>
+<h4>{{.variation.Name}}</h4>
+<table class="seats" data-variationid="{{.variation.ID}}">
+{{range $i, $row := .variation.Stocks}}
+<tr>
+  {{range $j, $stock := $row}}
+  <td id="{{$i | printf "%02d" }}-{{$j | printf "%02d" }}" class="{{if $stock.OrderID.Valid}}unavailable{{else}}available{{end}}"></td>
+  {{end}}
+</tr>
 {{end}}
+</table>

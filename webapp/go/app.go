@@ -160,7 +160,7 @@ type OrderRequestCSV struct {
 }
 
 type SeatMapCache struct {
-	TicketID	uint
+	VariationID	uint
 	Content		template.HTML
 	ExpireAt	int64
 }
@@ -342,36 +342,43 @@ WHERE t.id = ? LIMIT 1`, ticketid)
 		}
 	}
 
-	var zaseki template.HTML;
 	recents, err := getRecentSold()
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
 
-	cache, ok := SeatMapCacheOf[ticket.Ticket.ID]
-	if ( ok && cache.ExpireAt >= time.Now().Unix() ) {
-		zaseki = cache.Content
-	} else {
-		fmt.Println("expired!!!")
-		var doc bytes.Buffer
-		tmpl.ExecuteTemplate(&doc, "zaseki.html", map[string]interface{}{
-			"variations": variations,
-		})
-		var cache SeatMapCache
-		cache.TicketID = ticket.Ticket.ID
-		cache.Content = template.HTML(doc.String())
-		zaseki = cache.Content
-		cache.ExpireAt = time.Now().Unix() + 1
-		SeatMapCacheOf[ticket.Ticket.ID] = cache
+	seatMaps := make([]template.HTML, len(variations));
+	for i, variation := range variations {
+		cache, ok := SeatMapCacheOf[variation.ID]
+		if ( ok && cache.ExpireAt >= time.Now().Unix() ) {
+			seatMaps[i] = cache.Content
+		} else {
+			cache := generateSeatMapCache(variation)
+			seatMaps[i] = cache.Content
+		}
 	}
 
 	tmpl.ExecuteTemplate(w, "ticket.html", map[string]interface{}{
 		"recents":    recents,
 		"ticket":     ticket,
-		"zaseki":     zaseki,
+		"seatMaps":   seatMaps,
 		"variations": variations,
 	})
+}
+
+func generateSeatMapCache(variation VariationWithStocks) SeatMapCache {
+	fmt.Println("expired!!!")
+	var doc bytes.Buffer
+	tmpl.ExecuteTemplate(&doc, "zaseki.html", map[string]interface{}{
+		"variation": variation,
+	})
+	var cache SeatMapCache
+	cache.VariationID = variation.ID
+	cache.Content = template.HTML(doc.String())
+	cache.ExpireAt = time.Now().Unix() + 1
+	SeatMapCacheOf[variation.ID] = cache
+	return cache
 }
 
 func buyHandler(w http.ResponseWriter, r *http.Request) {
