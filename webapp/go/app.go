@@ -10,6 +10,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/mux"
 	"github.com/jmoiron/sqlx"
+	"github.com/pmylund/go-cache"
 	"html/template"
 	"io"
 	"log"
@@ -21,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 var db *sqlx.DB
@@ -28,6 +30,7 @@ var tmpl *template.Template
 var port = flag.Uint("port", 0, "port to listen")
 var appDir = flag.String("appdir", ".", "the directory where public & views directories are located")
 var mysqlSock = flag.String("mysqlsock", "", "mysql unix socket path")
+var c = cache.New(30*time.Second, 10*time.Second)
 
 func main() {
 	flag.Parse()
@@ -253,11 +256,17 @@ func artistHandler(w http.ResponseWriter, r *http.Request) {
 
 	for i := 0; i < len(tickets); i++ {
 		ticket := &tickets[i]
-		err = db.Get(&ticket.Count, `
+		key := "count_" + strconv.FormatInt(int64(i), 10)
+		if x, found := c.Get(key); found {
+			ticket.Count = x.(int)
+		} else {
+			err = db.Get(&ticket.Count, `
 SELECT COUNT(*) AS cnt FROM variation
 INNER JOIN stock ON stock.variation_id = variation.id
 WHERE variation.ticket_id = ? AND stock.order_id IS NULL`, ticket.ID)
-		//log.Printf("%+v", ticket.Count)
+			c.Set(key, ticket.Count, 0)
+			//log.Printf("%+v", ticket.Count)
+		}
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
