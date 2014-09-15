@@ -7,17 +7,20 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"html/template"
-	"io"
-	"net/http"
-	"os"
-	"regexp"
-	"strconv"
-	"strings"
-
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/mux"
 	"github.com/jmoiron/sqlx"
+	"html/template"
+	"io"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"regexp"
+	"strconv"
+	"strings"
+	"syscall"
 )
 
 var db *sqlx.DB
@@ -47,10 +50,23 @@ func serveHTTP() {
 	r.HandleFunc("/admin", adminPostHandler).Methods("POST")
 	r.PathPrefix("/").Handler(http.FileServer(http.Dir(getAppDir() + "/public/")))
 	http.Handle("/", r)
-	err := http.ListenAndServe(fmt.Sprintf(":%d", *port), nil)
+
+	sigchan := make(chan os.Signal)
+	signal.Notify(sigchan, os.Interrupt)
+	signal.Notify(sigchan, syscall.SIGTERM)
+	signal.Notify(sigchan, syscall.SIGINT)
+
+	var l net.Listener
+	var err error
+	l, err = net.ListenTCP("tcp", &net.TCPAddr{Port: int(*port)})
 	if err != nil {
 		panic(err.Error())
 	}
+	go func() {
+		log.Println(http.Serve(l, nil))
+	}()
+
+	<-sigchan
 }
 
 type dbConfig struct {
