@@ -7,6 +7,10 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	_ "github.com/go-sql-driver/mysql"
+	"github.com/gorilla/mux"
+	"github.com/jmoiron/sqlx"
+	goCache "github.com/pmylund/go-cache"
 	"html/template"
 	"io"
 	"log"
@@ -20,11 +24,6 @@ import (
 	"sync"
 	"syscall"
 	"time"
-
-	_ "github.com/go-sql-driver/mysql"
-	"github.com/gorilla/mux"
-	"github.com/jmoiron/sqlx"
-	"github.com/pmylund/go-cache"
 )
 
 var db *sqlx.DB
@@ -33,7 +32,7 @@ var port = flag.Uint("port", 0, "port to listen")
 var appDir = flag.String("appdir", ".", "the directory where public & views directories are located")
 var mysqlSock = flag.String("mysqlsock", "", "mysql unix socket path")
 var SeatMapCacheOf = make(map[uint]SeatMapCache, 100)
-var c = cache.New(30*time.Second, 10*time.Second)
+var gocache = goCache.New(30*time.Second, 10*time.Second)
 
 var ArtistNames = []string{"", "NHN48", "はだいろクローバーZ"}
 var TicketNames = []string{"", "西武ドームライブ", "東京ドームライブ", "さいたまスーパーアリーナライブ", "横浜アリーナライブ", "西武ドームライブ"}
@@ -276,14 +275,14 @@ func artistHandler(w http.ResponseWriter, r *http.Request) {
 	for i := 0; i < len(tickets); i++ {
 		ticket := &tickets[i]
 		key := "count_" + strconv.FormatInt(int64(i), 10)
-		if x, found := c.Get(key); found {
+		if x, found := gocache.Get(key); found {
 			ticket.Count = x.(int)
 		} else {
 			err = db.Get(&ticket.Count, `
 SELECT COUNT(*) AS cnt FROM variation
 INNER JOIN stock ON stock.variation_id = variation.id
 WHERE variation.ticket_id = ? AND stock.order_id IS NULL`, ticket.ID)
-			c.Set(key, ticket.Count, 0)
+			gocache.Set(key, ticket.Count, 0)
 			//log.Printf("%+v", ticket.Count)
 		}
 		if err != nil {
