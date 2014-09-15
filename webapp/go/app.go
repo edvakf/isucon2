@@ -30,6 +30,7 @@ var tmpl *template.Template
 var port = flag.Uint("port", 0, "port to listen")
 var appDir = flag.String("appdir", ".", "the directory where public & views directories are located")
 var mysqlSock = flag.String("mysqlsock", "", "mysql unix socket path")
+var SeatMapCacheOf = make(map[uint]SeatMapCache, 100)
 var c = cache.New(30*time.Second, 10*time.Second)
 
 func main() {
@@ -37,6 +38,9 @@ func main() {
 	connectDB()
 	initTmpl()
 	serveHTTP()
+}
+
+func init() {
 }
 
 func getAppDir() string {
@@ -154,6 +158,12 @@ type OrderRequestCSV struct {
 	VariationID uint   `db:"variation_id"`
 	SeatID      string `db:"seat_id"`
 	UpdatedAt   string `db:"updated_at"`
+}
+
+type SeatMapCache struct {
+	VariationID	uint
+	Content		template.HTML
+	ExpireAt	int64
 }
 
 func (csv OrderRequestCSV) ToLine() string {
@@ -345,17 +355,48 @@ WHERE t.id = ? LIMIT 1`, ticketid)
 		return
 	}
 
+	seatMaps := make([]template.HTML, len(variations));
+	for i, variation := range variations {
+		cache, ok := SeatMapCacheOf[variation.ID]
+		if ( ok && cache.ExpireAt >= time.Now().Unix() ) {
+			seatMaps[i] = cache.Content
+		} else {
+			cache := generateSeatMapCache(variation)
+			seatMaps[i] = cache.Content
+		}
+	}
+
 	tmpl.ExecuteTemplate(w, "ticket.html", map[string]interface{}{
 		"recents":    recents,
 		"ticket":     ticket,
+		"seatMaps":   seatMaps,
 		"variations": variations,
 	})
+}
+
+func generateSeatMapCache(variation VariationWithStocks) SeatMapCache {
+	fmt.Println("expired!!!")
+	var doc bytes.Buffer
+	tmpl.ExecuteTemplate(&doc, "zaseki.html", map[string]interface{}{
+		"variation": variation,
+	})
+	var cache SeatMapCache
+	cache.VariationID = variation.ID
+	cache.Content = template.HTML(doc.String())
+	cache.ExpireAt = time.Now().Unix() + 10
+	SeatMapCacheOf[variation.ID] = cache
+	return cache
 }
 
 func buyHandler(w http.ResponseWriter, r *http.Request) {
 	memberid := r.PostFormValue("member_id")
 	variationid := r.PostFormValue("variation_id")
 	//log.Printf("memberid: %s, variationid: %s", memberid, variationid)
+	variationId, err := strconv.Atoi(variationid)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
 
 	tx, err := db.Beginx()
 	if err != nil {
@@ -409,6 +450,11 @@ UPDATE stock SET order_id = ?
 		return
 	}
 	tx.Commit()
+
+	v, ok := SeatMapCacheOf[uint(variationId)]
+	if ok {
+		v.ExpireAt = 0
+	}
 
 	tmpl.ExecuteTemplate(w, "complete.html", map[string]interface{}{
 		"seatid":   seatid,
