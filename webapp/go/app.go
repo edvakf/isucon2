@@ -365,12 +365,19 @@ WHERE t.id = ? LIMIT 1`, ticketid)
 
 	seatMaps := make([]template.HTML, len(variations))
 	for i, variation := range variations {
-		cache, ok := SeatMapCacheOf[variation.ID]
-		if ok && cache.ExpireAt >= time.Now().Unix() {
-			seatMaps[i] = cache.Content
+		key := fmt.Sprintf("seat_map_cahce_of_%d", variation.ID)
+		v, found := gocache.Get(key)
+		var seatCache SeatMapCache
+		if v != nil {
+			seatCache = v.(SeatMapCache)
+		}
+
+		if found && v != nil && seatCache.ExpireAt > time.Now().Unix() {
+			seatMaps[i] = seatCache.Content
 		} else {
-			cache := generateSeatMapCache(variation)
-			seatMaps[i] = cache.Content
+			seatCache := generateSeatMapCache(variation)
+			gocache.Set(key, seatCache, 0)
+			seatMaps[i] = seatCache.Content
 		}
 	}
 
@@ -400,11 +407,6 @@ func buyHandler(w http.ResponseWriter, r *http.Request) {
 	memberid := r.PostFormValue("member_id")
 	variationid := r.PostFormValue("variation_id")
 	//log.Printf("memberid: %s, variationid: %s", memberid, variationid)
-	variationId, err := strconv.Atoi(variationid)
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
 
 	tx, err := db.Beginx()
 	if err != nil {
@@ -459,10 +461,8 @@ UPDATE stock SET order_id = ?
 	}
 	tx.Commit()
 
-	v, ok := SeatMapCacheOf[uint(variationId)]
-	if ok {
-		v.ExpireAt = 0
-	}
+	key := fmt.Sprintf("seat_map_cahce_of_%d", variationid)
+	gocache.Delete(key)
 
 	vid, _ := strconv.Atoi(variationid)
 	vid = vid
