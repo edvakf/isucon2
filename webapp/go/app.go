@@ -381,11 +381,9 @@ WHERE t.id = ? LIMIT 1`, ticketid)
 		} else {
 			seatCache := generateSeatMapCache(variation)
 			seatMaps[i] = seatCache.Content
-			go func() {
-				seatCacheMutex.Lock()
-				gocache.Set(key, seatCache, 0)
-				seatCacheMutex.Unlock()
-			}()
+			seatCacheMutex.Lock()
+			gocache.Set(key, seatCache, 0)
+			seatCacheMutex.Unlock()
 		}
 	}
 
@@ -448,7 +446,9 @@ UPDATE stock SET order_id = ?
 	}
 
 	key := fmt.Sprintf("seat_map_cahce_of_%d", variationid)
+	seatCacheMutex.Lock()
 	gocache.Delete(key)
+	seatCacheMutex.Unlock()
 
 	aff, err := res.RowsAffected()
 	if err != nil {
