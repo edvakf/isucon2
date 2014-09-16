@@ -335,25 +335,6 @@ WHERE t.id = ? LIMIT 1`, ticketid)
 			http.Error(w, err.Error(), 500)
 			return
 		}
-		//log.Printf("%+v", v.Count)
-
-		stocks := []Stock{}
-		err = db.Select(&stocks,
-			`SELECT seat_id, order_id FROM stock WHERE variation_id = ?`, v.ID)
-		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		//log.Printf("%+v", stocks)
-		for _, stock := range stocks {
-			if stock.OrderID.Valid {
-				//log.Printf("%+v", stock)
-			}
-			m := regexp.MustCompile(`(\d+)-(\d+)`).FindStringSubmatch(stock.SeatID)
-			row, _ := strconv.Atoi(m[1])
-			col, _ := strconv.Atoi(m[2])
-			v.Stocks[row][col] = stock
-		}
 	}
 
 	recents, err := getRecentSold()
@@ -372,9 +353,13 @@ WHERE t.id = ? LIMIT 1`, ticketid)
 			seatCache = v.(SeatMapCache)
 			seatMaps[i] = seatCache.Content
 		} else {
+			if err = loadStocksToVariation(&variation); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
 			seatCache := generateSeatMapCache(variation)
 			seatMaps[i] = seatCache.Content
-			gocache.Set(key, seatCache, 2*time.Second)
+			gocache.Set(key, seatCache, 1*time.Second)
 		}
 	}
 
@@ -559,4 +544,27 @@ func adminPostHandler(w http.ResponseWriter, r *http.Request) {
 	rsMutex.Unlock()
 
 	http.Redirect(w, r, "/admin", 302)
+}
+
+func loadStocksToVariation(v *VariationWithStocks) (error) {
+	//log.Printf("%+v", v.Count)
+
+	stocks := []Stock{}
+	err := db.Select(&stocks,
+		`SELECT seat_id, order_id FROM stock WHERE variation_id = ?`, v.ID)
+	if err != nil {
+		return err
+	}
+	//log.Printf("%+v", stocks)
+	stockRegexp := regexp.MustCompile(`(\d+)-(\d+)`)
+	for _, stock := range stocks {
+		if stock.OrderID.Valid {
+			//log.Printf("%+v", stock)
+		}
+		m := stockRegexp.FindStringSubmatch(stock.SeatID)
+		row, _ := strconv.Atoi(m[1])
+		col, _ := strconv.Atoi(m[2])
+		v.Stocks[row][col] = stock
+	}
+	return nil
 }
