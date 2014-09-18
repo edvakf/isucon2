@@ -14,16 +14,19 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/mux"
 	"github.com/jmoiron/sqlx"
+	Gocache "github.com/pmylund/go-cache"
 )
 
 var db *sqlx.DB
 var tmpl *template.Template
 var port = flag.Uint("port", 5000, "port to listen")
 var appDir = flag.String("appdir", ".", "the directory where public & views directories are located")
+var gocache = Gocache.New(5*time.Minute, 30*time.Second)
 
 func main() {
 	flag.Parse()
