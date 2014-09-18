@@ -247,25 +247,42 @@ WHERE variation.ticket_id = ? AND stock.order_id IS NULL`, ticket.ID)
 }
 
 func ticketHandler(w http.ResponseWriter, r *http.Request) {
-	ticketid := mux.Vars(r)["ticketid"]
+	ticketID, _ := strconv.Atoi(mux.Vars(r)["ticketid"])
 
+	seats, err := seatHTML(ticketID)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	recents, err := getRecentSold()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	tmpl.ExecuteTemplate(w, "ticket.html", map[string]interface{}{
+		"recents": recents,
+		"seats":   seats,
+	})
+}
+
+func seatHTML(ticketID int) (template.HTML, error) {
 	ticket := TicketWithArtist{}
 	err := db.Get(&ticket, `
 SELECT t.*, a.name AS artist_name FROM ticket t
 INNER JOIN artist a ON t.artist_id = a.id
-WHERE t.id = ? LIMIT 1`, ticketid)
+WHERE t.id = ? LIMIT 1`, ticketID)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
+		return "", err
 	}
 	//log.Printf("%+v", ticket)
 
 	variations := []VariationWithStocks{}
 	err = db.Select(&variations,
-		`SELECT id, name FROM variation WHERE ticket_id = ? ORDER BY id`, ticketid)
+		`SELECT id, name FROM variation WHERE ticket_id = ? ORDER BY id`, ticketID)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
+		return "", err
 	}
 	//log.Printf("%+v", variations)
 
@@ -274,8 +291,7 @@ WHERE t.id = ? LIMIT 1`, ticketid)
 		err := db.Get(&v.Count,
 			`SELECT COUNT(*) AS cnt FROM stock WHERE variation_id = ? AND order_id IS NULL`, v.ID)
 		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
+			return "", err
 		}
 		//log.Printf("%+v", v.Count)
 
@@ -283,8 +299,7 @@ WHERE t.id = ? LIMIT 1`, ticketid)
 		err = db.Select(&stocks,
 			`SELECT seat_id, order_id FROM stock WHERE variation_id = ?`, v.ID)
 		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
+			return "", err
 		}
 		//log.Printf("%+v", stocks)
 		for _, stock := range stocks {
@@ -298,17 +313,14 @@ WHERE t.id = ? LIMIT 1`, ticketid)
 		}
 	}
 
-	recents, err := getRecentSold()
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
+	var doc bytes.Buffer
 
-	tmpl.ExecuteTemplate(w, "ticket.html", map[string]interface{}{
-		"recents":    recents,
+	tmpl.ExecuteTemplate(&doc, "seats.html", map[string]interface{}{
 		"ticket":     ticket,
 		"variations": variations,
 	})
+
+	return template.HTML(doc.String()), nil
 }
 
 func buyHandler(w http.ResponseWriter, r *http.Request) {

@@ -1,0 +1,29 @@
+{{$ticket := .ticket}}
+<h2>{{$ticket.ArtistName}} : {{$ticket.Name}}</h2>
+<ul>
+  {{range .variations}}
+  <li class="variation">
+    <form method="POST" action="/buy">
+      <input type="hidden" name="ticket_id" value="{{$ticket.ID}}" />
+      <input type="hidden" name="variation_id" value="{{.ID}}" />
+      <span class="variation_name">{{.Name}}</span> 残り<span class="vacancy" id="vacancy_{{.ID}}">{{.Count}}</span>席
+      <input type="text" name="member_id" value="" />
+      <input type="submit" value="購入" />
+    </form>
+  </li>
+  {{end}}
+</ul>
+
+<h3>席状況</h3>
+{{range .variations}}
+  <h4>{{.Name}}</h4>
+  <table class="seats" data-variationid="{{.ID}}">
+    {{range $i, $row := .Stocks}}
+    <tr>
+      {{range $j, $stock := $row}}
+      <td id="{{$i | printf "%02d" }}-{{$j | printf "%02d"}}" class="{{if $stock.OrderID.Valid}}unavailable{{else}}available{{end}}"></td>
+      {{end}}
+    </tr>
+    {{end}}
+  </table>
+{{end}}
