@@ -249,10 +249,19 @@ WHERE variation.ticket_id = ? AND stock.order_id IS NULL`, ticket.ID)
 func ticketHandler(w http.ResponseWriter, r *http.Request) {
 	ticketID, _ := strconv.Atoi(mux.Vars(r)["ticketid"])
 
-	seats, err := seatHTML(ticketID)
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
+	var seats template.HTML
+	if cache, ok := gocache.Get(seatCacheKey(ticketID)); ok {
+		//log.Printf("cache found: %d", ticketID)
+		seats = cache.(template.HTML)
+	} else {
+		//log.Printf("cache not found: %d", ticketID)
+		seats_, err := seatHTML(ticketID)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		seats = seats_
+		gocache.Set(seatCacheKey(ticketID), seats, 1*time.Second)
 	}
 
 	recents, err := getRecentSold()
@@ -265,6 +274,10 @@ func ticketHandler(w http.ResponseWriter, r *http.Request) {
 		"recents": recents,
 		"seats":   seats,
 	})
+}
+
+func seatCacheKey(ticketID int) string {
+	return fmt.Sprintf("seats-%d", ticketID)
 }
 
 func seatHTML(ticketID int) (template.HTML, error) {
