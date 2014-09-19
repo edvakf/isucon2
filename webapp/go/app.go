@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	_ "github.com/go-sql-driver/mysql"
@@ -42,6 +43,7 @@ var RecentSoldList = make([]RecentSold, 10)
 var RecentSoldListLen = 0
 
 var rsMutex *sync.RWMutex
+var buyTicketQueue = make(chan BuyTicketTask)
 
 func main() {
 	flag.Parse()
@@ -71,6 +73,7 @@ func serveHTTP() {
 	r.HandleFunc("/admin", adminPostHandler).Methods("POST")
 	r.PathPrefix("/").Handler(http.FileServer(http.Dir(getAppDir() + "/public/")))
 	http.Handle("/", r)
+	go buyer()
 
 	sigchan := make(chan os.Signal)
 	signal.Notify(sigchan, os.Interrupt)
@@ -176,6 +179,17 @@ type OrderRequestCSV struct {
 type SeatMapCache struct {
 	VariationID uint
 	Content     template.HTML
+}
+
+type BuyTicketResult struct {
+	SeatId string
+	Error error
+}
+
+type BuyTicketTask struct {
+	StockId int
+	OrderId int64
+	Result chan BuyTicketResult
 }
 
 func (csv OrderRequestCSV) ToLine() string {
@@ -410,72 +424,132 @@ func buyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	//log.Printf("orderid: %d", orderid)
 
-	res, err = tx.Exec(`
-UPDATE stock SET order_id = ?
-	WHERE variation_id = ? AND order_id IS NULL
-	ORDER BY RAND() LIMIT 1`, orderid, variationid)
-	if err != nil {
-		tx.Rollback()
-		http.Error(w, err.Error(), 500)
-		return
+	var result BuyTicketResult
+	for {
+		var stockid int
+		err = tx.Get(&stockid, `SELECT id FROM stock WHERE variation_id = ? AND order_id IS NULL ORDER BY id DESC LIMIT 1`, variationid)
+		if err != nil {
+			tx.Rollback()
+			http.Error(w, err.Error(), 500)
+		}
+		var task BuyTicketTask
+		task.Result = make(chan BuyTicketResult)
+		task.StockId = stockid
+		task.OrderId = orderid
+		buyTicketQueue <- task
+		result = <-task.Result
+		fmt.Println("%+v\n", result)
+		if result.Error == nil {
+			break
+		} else {
+			fmt.Errorf(result.Error.Error())
+		}
 	}
+	tx.Commit()
 
-	key := fmt.Sprintf("seat_map_cahce_of_%d", variationid)
-	gocache.Delete(key)
-
-	aff, err := res.RowsAffected()
-	if err != nil {
-		tx.Rollback()
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	//log.Printf("affected: %d", aff)
-	if aff == 0 {
+	if result.SeatId == "" {
 		tx.Rollback()
 		tmpl.ExecuteTemplate(w, "soldout.html", nil)
 		return
 	}
 
-	var seatid string
-	err = tx.Get(&seatid, "SELECT seat_id FROM stock WHERE order_id = ? LIMIT 1", orderid)
-	if err != nil {
-		tx.Rollback()
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	tx.Commit()
+	go func(variationid string) {
+		key := fmt.Sprintf("seat_map_cahce_of_%d", variationid)
+		gocache.Delete(key)
+	}(variationid)
 
-	vid, _ := strconv.Atoi(variationid)
-	vid = vid
-	tid := (vid + 1) / 2
-	aid := 1
-	if tid >= 3 {
-		aid = 2
-	}
-	//log.Printf("%d %s, %d %s, %d %s", vid, VariationNames[vid], tid, TicketNames[tid], aid, ArtistNames[aid])
 
-	rsMutex.Lock()
-	for i := RecentSoldListLen; i > 0; i-- {
-		if i == 10 {
-			continue
+	go func(variationid string) {
+		vid, _ := strconv.Atoi(variationid)
+		vid = vid
+		tid := (vid + 1) / 2
+		aid := 1
+		if tid >= 3 {
+			aid = 2
 		}
-		RecentSoldList[i] = RecentSoldList[i-1]
-	}
-	RecentSoldList[0] = RecentSold{
-		SeatID: seatid,
-		VName:  VariationNames[vid],
-		TName:  TicketNames[tid],
-		AName:  ArtistNames[aid],
-	}
-	if RecentSoldListLen < 10 {
-		RecentSoldListLen++
-	}
-	rsMutex.Unlock()
+		//log.Printf("%d %s, %d %s, %d %s", vid, VariationNames[vid], tid, TicketNames[tid], aid, ArtistNames[aid])
+
+		rsMutex.Lock()
+		for i := RecentSoldListLen; i > 0; i-- {
+			if i == 10 {
+				continue
+			}
+			RecentSoldList[i] = RecentSoldList[i-1]
+		}
+		RecentSoldList[0] = RecentSold{
+			SeatID: result.SeatId,
+			VName:  VariationNames[vid],
+			TName:  TicketNames[tid],
+			AName:  ArtistNames[aid],
+		}
+		if RecentSoldListLen < 10 {
+			RecentSoldListLen++
+		}
+		rsMutex.Unlock()
+	}(variationid)
 
 	tmpl.ExecuteTemplate(w, "complete.html", map[string]interface{}{
-		"seatid":   seatid,
+		"seatid":   result.SeatId,
 		"memberid": memberid,
 	})
+}
+
+func buyer() {
+	for {
+		select {
+		case task := <-buyTicketQueue:
+			tx, err := db.Beginx();
+			var seatid string;
+			result := BuyTicketResult{}
+			fmt.Println("%s\n", task.StockId)
+			err = tx.Get(&seatid, `SELECT seat_id FROM stock WHERE id = ? FOR UPDATE`, task.StockId)
+			if err != nil {
+				tx.Rollback()
+				result.SeatId = ""
+				result.Error = err
+				task.Result <- result
+				continue
+			}
+
+			res, err := tx.Exec(`
+				UPDATE stock SET order_id = ?
+					WHERE id = ? 
+					ORDER BY id DESC LIMIT 1`, task.OrderId, task.StockId)
+			if err != nil {
+				tx.Rollback()
+				result.SeatId = ""
+				result.Error = err
+				task.Result <- result
+				continue
+			}
+
+			aff, err := res.RowsAffected()
+			if err != nil {
+				tx.Rollback()
+				result.SeatId = ""
+				result.Error = err
+				task.Result <- result
+				continue
+			}
+			if aff == 0 {
+				tx.Rollback()
+				result.SeatId = ""
+				result.Error = errors.New("already sold stock")
+				task.Result <- result
+				continue
+			}
+
+			err = tx.Commit()
+			if err != nil {
+				result.SeatId = ""
+				result.Error = errors.New("failed to commit")
+				task.Result <- result
+			}
+			result.SeatId = seatid
+			task.Result <- result
+
+		}
+	}
 }
 
 func adminHandler(w http.ResponseWriter, r *http.Request) {
@@ -568,3 +642,4 @@ func loadStocksToVariation(v *VariationWithStocks) (error) {
 	}
 	return nil
 }
+
