@@ -475,7 +475,7 @@ func buyHandler(w http.ResponseWriter, r *http.Request) {
 	columns = append(columns, memberid)
 	columns = append(columns, seatid)
 	columns = append(columns, variationid)
-	columns = append(columns, now.Format("2006-01-02 150405"))
+	columns = append(columns, now.Format("2006-01-02 15:04:05"))
 	c.Do("LPUSH", "order_request", strings.Join(columns, ","))
 
 	go func(variationid string) {
@@ -574,27 +574,20 @@ func adminHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func adminOrderHandler(w http.ResponseWriter, r *http.Request) {
-	rows, err := db.Queryx(`
-SELECT order_request.*, stock.seat_id, stock.variation_id, stock.updated_at
-FROM order_request JOIN stock ON order_request.id = stock.order_id
-ORDER BY order_request.id ASC`)
+	c, err := connectRedis()
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-
-	var body bytes.Buffer
-
-	for rows.Next() {
-		var csv OrderRequestCSV
-		err = rows.StructScan(&csv)
-		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		body.WriteString(csv.ToLine())
+	lines, err := redis.Strings(c.Do("LRANGE", "order_request", 0, -1))
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
 	}
-	rows.Close()
+	var body bytes.Buffer
+	for _, line := range lines {
+		body.WriteString(line + "\n")
+	}
 
 	w.Header().Set("Content-Type", "text/csv")
 	_, _ = body.WriteTo(w)
