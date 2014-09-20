@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	_ "github.com/go-sql-driver/mysql"
@@ -77,7 +76,6 @@ func serveHTTP() {
 	r.PathPrefix("/").Handler(http.FileServer(http.Dir(getAppDir() + "/public/")))
 	http.Handle("/", r)
 
-	go buyer()
 	sigchan := make(chan os.Signal)
 	signal.Notify(sigchan, os.Interrupt)
 	signal.Notify(sigchan, syscall.SIGTERM)
@@ -517,56 +515,6 @@ func buyHandler(w http.ResponseWriter, r *http.Request) {
 		"seatid":   seatid,
 		"memberid": memberid,
 	})
-}
-
-func buyer() {
-	for {
-		select {
-		case task := <-buyTicketQueue:
-			tx, err := db.Beginx();
-			var seatid string;
-			result := BuyTicketResult{}
-			fmt.Println("%s\n", task.StockId)
-			err = tx.Get(&seatid, `SELECT seat_id FROM stock WHERE id = ? FOR UPDATE`, task.StockId)
-			handleError := func (err error) {
-				result.SeatId = ""
-				result.Error = err
-				task.Result <- result
-			}
-			if err != nil {
-				handleError(err)
-				continue
-			}
-
-			res, err := tx.Exec(`
-				UPDATE stock SET order_id = ?
-					WHERE id = ? 
-					ORDER BY id DESC LIMIT 1`, task.OrderId, task.StockId)
-			if err != nil {
-				handleError(err)
-				continue
-			}
-
-			aff, err := res.RowsAffected()
-			if err != nil {
-				handleError(err)
-				continue
-			}
-			if aff == 0 {
-				handleError(errors.New("already sold stock"))
-				continue
-			}
-
-			err = tx.Commit()
-			if err != nil {
-				handleError(errors.New("failed to commit"))
-				continue
-			}
-			result.SeatId = seatid
-			task.Result <- result
-
-		}
-	}
 }
 
 func adminHandler(w http.ResponseWriter, r *http.Request) {
