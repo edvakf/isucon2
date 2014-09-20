@@ -503,11 +503,13 @@ func buyer() {
 			result := BuyTicketResult{}
 			fmt.Println("%s\n", task.StockId)
 			err = tx.Get(&seatid, `SELECT seat_id FROM stock WHERE id = ? FOR UPDATE`, task.StockId)
-			if err != nil {
-				tx.Rollback()
+			handleError := func (err error) {
 				result.SeatId = ""
 				result.Error = err
 				task.Result <- result
+			}
+			if err != nil {
+				handleError(err)
 				continue
 			}
 
@@ -516,34 +518,24 @@ func buyer() {
 					WHERE id = ? 
 					ORDER BY id DESC LIMIT 1`, task.OrderId, task.StockId)
 			if err != nil {
-				tx.Rollback()
-				result.SeatId = ""
-				result.Error = err
-				task.Result <- result
+				handleError(err)
 				continue
 			}
 
 			aff, err := res.RowsAffected()
 			if err != nil {
-				tx.Rollback()
-				result.SeatId = ""
-				result.Error = err
-				task.Result <- result
+				handleError(err)
 				continue
 			}
 			if aff == 0 {
-				tx.Rollback()
-				result.SeatId = ""
-				result.Error = errors.New("already sold stock")
-				task.Result <- result
+				handleError(errors.New("already sold stock"))
 				continue
 			}
 
 			err = tx.Commit()
 			if err != nil {
-				result.SeatId = ""
-				result.Error = errors.New("failed to commit")
-				task.Result <- result
+				handleError(errors.New("failed to commit"))
+				continue
 			}
 			result.SeatId = seatid
 			task.Result <- result
