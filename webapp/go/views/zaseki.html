@@ -1,9 +1,11 @@
 <h4>{{.variation.Name}}</h4>
 <table class="seats" data-variationid="{{.variation.ID}}">
-{{range $i, $row := .variation.Stocks}}
+{{range $i, $arr := .seatMap}}
 <tr>
-  {{range $j, $stock := $row}}
-  <td id="{{$i | printf "%02d" }}-{{$j | printf "%02d" }}" class="{{if $stock.OrderID.Valid}}unavailable{{else}}available{{end}}"></td>
+  {{range $j, $isAvailable := $arr}}
+  	{{with $seatId := printf "%02d-%02d" $i $j}}
+		<td id="{{$seatId}}" class="{{if $isAvailable}}available{{else}}unavailable{{end}}"></td>
+	{{end}}
   {{end}}
 </tr>
 {{end}}

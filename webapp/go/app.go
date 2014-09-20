@@ -12,6 +12,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/jmoiron/sqlx"
 	goCache "github.com/pmylund/go-cache"
+	"github.com/garyburd/redigo/redis"
 	"html/template"
 	"io"
 	"log"
@@ -53,6 +54,8 @@ func main() {
 	rsMutex = &sync.RWMutex{}
 
 	serveHTTP()
+
+	db.Close()
 }
 
 func init() {
@@ -73,8 +76,8 @@ func serveHTTP() {
 	r.HandleFunc("/admin", adminPostHandler).Methods("POST")
 	r.PathPrefix("/").Handler(http.FileServer(http.Dir(getAppDir() + "/public/")))
 	http.Handle("/", r)
-	go buyer()
 
+	go buyer()
 	sigchan := make(chan os.Signal)
 	signal.Notify(sigchan, os.Interrupt)
 	signal.Notify(sigchan, syscall.SIGTERM)
@@ -231,6 +234,11 @@ func connectDB() {
 	}
 }
 
+func connectRedis() (redis.Conn, error) {
+	c, err := redis.Dial("tcp", ":6379")
+	return c, err
+}
+
 func initTmpl() {
 	tmpl = template.Must(template.ParseGlob(getAppDir() + "/views/*.html"))
 }
@@ -341,10 +349,16 @@ WHERE t.id = ? LIMIT 1`, ticketid)
 	}
 	//log.Printf("%+v", variations)
 
+	c, err := connectRedis()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
 	for i := 0; i < len(variations); i++ {
 		v := &variations[i]
-		err := db.Get(&v.Count,
-			`SELECT COUNT(*) AS cnt FROM stock WHERE variation_id = ? AND order_id IS NULL`, v.ID)
+
+		num, err := redis.Int(c.Do("SCARD", fmt.Sprintf("stock_%d", v.ID)))
+		v.Count = uint(num)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
@@ -388,8 +402,39 @@ WHERE t.id = ? LIMIT 1`, ticketid)
 func generateSeatMapCache(variation VariationWithStocks) SeatMapCache {
 	fmt.Println("expired!!!")
 	var doc bytes.Buffer
+	seatRange := [64]int{}
+	seatRange2 := [64]int{}
+	for i := 0; i < 64; i++ {
+		seatRange[i] = i
+		seatRange2[i] = i
+	}
+
+	c, err := connectRedis()
+	if err != nil {
+		panic(err)
+	}
+	vals, err := redis.Strings(c.Do("SMEMBERS", fmt.Sprintf("stock_%d", variation.ID)))
+	if err != nil {
+		panic(err)
+	}
+
+	stockOf := make(map[string]bool)
+
+	for _, v := range vals {
+		stockOf[v] = true
+	}
+
+	var seatMap [64][64]bool
+	for i := 0; i < 64; i++ {
+		for j := 0; j < 64; j++ {
+			_, ok := stockOf[fmt.Sprintf("%02d-%02d", i, j)]
+			seatMap[i][j] = ok
+		}
+	}
+
 	tmpl.ExecuteTemplate(&doc, "zaseki.html", map[string]interface{}{
 		"variation": variation,
+		"seatMap": seatMap,
 	})
 	var cache SeatMapCache
 	cache.VariationID = variation.ID
@@ -403,55 +448,35 @@ func buyHandler(w http.ResponseWriter, r *http.Request) {
 	variationid := r.PostFormValue("variation_id")
 	//log.Printf("memberid: %s, variationid: %s", memberid, variationid)
 
-	tx, err := db.Beginx()
+	c, err := connectRedis()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	orderid, err := redis.Int(c.Do("INCR", "order_request_id"))
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
 
-	res, err := tx.Exec("INSERT INTO order_request (member_id) VALUES (?)", memberid)
+	seatid, err := redis.String(c.Do("SPOP", fmt.Sprintf("stock_%s", variationid)))
 	if err != nil {
-		tx.Rollback()
-		http.Error(w, err.Error(), 500)
-		return
-	}
-
-	orderid, err := res.LastInsertId()
-	if err != nil {
-		tx.Rollback()
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	//log.Printf("orderid: %d", orderid)
-
-	var result BuyTicketResult
-	for {
-		var stockid int
-		err = tx.Get(&stockid, `SELECT id FROM stock WHERE variation_id = ? AND order_id IS NULL ORDER BY id DESC LIMIT 1`, variationid)
-		if err != nil {
-			tx.Rollback()
-			http.Error(w, err.Error(), 500)
-		}
-		var task BuyTicketTask
-		task.Result = make(chan BuyTicketResult)
-		task.StockId = stockid
-		task.OrderId = orderid
-		buyTicketQueue <- task
-		result = <-task.Result
-		fmt.Println("%+v\n", result)
-		if result.Error == nil {
-			break
+		if err == redis.ErrNil {
+			tmpl.ExecuteTemplate(w, "soldout.html", nil)
+			return
 		} else {
-			fmt.Errorf(result.Error.Error())
+			http.Error(w, err.Error(), 500)
+			return
 		}
 	}
-	tx.Commit()
-
-	if result.SeatId == "" {
-		tx.Rollback()
-		tmpl.ExecuteTemplate(w, "soldout.html", nil)
-		return
-	}
+	now := time.Now()
+	var columns []string
+	columns = append(columns, fmt.Sprintf("%d", orderid))
+	columns = append(columns, memberid)
+	columns = append(columns, seatid)
+	columns = append(columns, variationid)
+	columns = append(columns, now.Format("2006-01-02 150405"))
+	c.Do("LPUSH", "order_request", strings.Join(columns, ","))
 
 	go func(variationid string) {
 		key := fmt.Sprintf("seat_map_cahce_of_%d", variationid)
@@ -477,7 +502,7 @@ func buyHandler(w http.ResponseWriter, r *http.Request) {
 			RecentSoldList[i] = RecentSoldList[i-1]
 		}
 		RecentSoldList[0] = RecentSold{
-			SeatID: result.SeatId,
+			SeatID: seatid,
 			VName:  VariationNames[vid],
 			TName:  TicketNames[tid],
 			AName:  ArtistNames[aid],
@@ -489,7 +514,7 @@ func buyHandler(w http.ResponseWriter, r *http.Request) {
 	}(variationid)
 
 	tmpl.ExecuteTemplate(w, "complete.html", map[string]interface{}{
-		"seatid":   result.SeatId,
+		"seatid":   seatid,
 		"memberid": memberid,
 	})
 }
@@ -584,6 +609,7 @@ func adminPostHandler(w http.ResponseWriter, r *http.Request) {
 
 	b := bufio.NewReader(f)
 
+
 	for {
 		line, err := b.ReadString('\n')
 		if err != nil {
@@ -603,6 +629,38 @@ func adminPostHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), 500)
 			return
 		}
+	}
+
+	c, err := connectRedis()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	_, err = c.Do("FLUSHDB")
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	stocks := []Stock{}
+	err = db.Select(&stocks, "SELECT * FROM stock")
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return;
+	}
+
+	c.Send("MULTI")
+	for _, stock := range stocks {
+		err = c.Send("SADD", fmt.Sprintf("stock_%d", stock.VariationID), stock.SeatID)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+	}
+	_, err = c.Do("EXEC")
+	if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
 	}
 
 	rsMutex.Lock()
