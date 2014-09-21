@@ -50,6 +50,7 @@ func main() {
 	connectDB()
 	initTmpl()
 
+	go ticketGenerator()
 	rsMutex = &sync.RWMutex{}
 
 	serveHTTP()
@@ -379,6 +380,7 @@ WHERE t.id = ? LIMIT 1`, ticketid)
 			seatCache = v.(SeatMapCache)
 			seatMaps[i] = seatCache.Content
 		} else {
+			fmt.Println("expired!!!")
 			if err = loadStocksToVariation(&variation); err != nil {
 				http.Error(w, err.Error(), 500)
 				return
@@ -398,7 +400,6 @@ WHERE t.id = ? LIMIT 1`, ticketid)
 }
 
 func generateSeatMapCache(variation VariationWithStocks) SeatMapCache {
-	fmt.Println("expired!!!")
 	var doc bytes.Buffer
 	seatRange := [64]int{}
 	seatRange2 := [64]int{}
@@ -474,12 +475,12 @@ func buyHandler(w http.ResponseWriter, r *http.Request) {
 	columns = append(columns, seatid)
 	columns = append(columns, variationid)
 	columns = append(columns, now.Format("2006-01-02 15:04:05"))
-	c.Do("LPUSH", "order_request", strings.Join(columns, ","))
+	c.Do("RPUSH", "order_request", strings.Join(columns, ","))
 
-	go func(variationid string) {
-		key := fmt.Sprintf("seat_map_cahce_of_%d", variationid)
-		gocache.Delete(key)
-	}(variationid)
+	// go func(variationid string) {
+	// 	key := fmt.Sprintf("seat_map_cahce_of_%d", variationid)
+	// 	gocache.Delete(key)
+	// }(variationid)
 
 
 	go func(variationid string) {
@@ -634,3 +635,22 @@ func loadStocksToVariation(v *VariationWithStocks) (error) {
 	return nil
 }
 
+func ticketGenerator() {
+	variations := []Variation{}
+	err := db.Select(&variations, "SELECT * FROM variation")
+	if err != nil {
+		panic(err)
+	}
+	ticker := time.NewTicker(time.Millisecond * 600)
+	for _ = range ticker.C {
+		for _, variation := range variations {
+			var varWithStocks VariationWithStocks
+			varWithStocks.Variation = variation
+			key := fmt.Sprintf("seat_map_cahce_of_%d", variation.ID)
+			fmt.Printf("generate cache %s\n", key)
+			seatCache := generateSeatMapCache(varWithStocks)
+			gocache.Set(key, seatCache, 2*time.Second)
+		}
+	}
+	ticker.Stop()
+}
