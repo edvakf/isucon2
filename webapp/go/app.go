@@ -605,7 +605,7 @@ func ticketItemGenerator(ticketid uint) {
 	if err != nil {
 		panic(err)
 	}
-	ticker := time.NewTicker(time.Millisecond * 200)
+	ticker := time.NewTicker(time.Millisecond * 400)
 	for _ = range ticker.C {
 		fmt.Printf("generate template: ticketid: %d\n", ticket.ID)
 		renderTicketTemplate(fmt.Sprintf("%d", ticket.ID))
