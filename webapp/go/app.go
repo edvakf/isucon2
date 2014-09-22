@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	_ "github.com/go-sql-driver/mysql"
@@ -328,75 +329,25 @@ WHERE variation.ticket_id = ? AND stock.order_id IS NULL`, ticket.ID)
 func ticketHandler(w http.ResponseWriter, r *http.Request) {
 	ticketid := mux.Vars(r)["ticketid"]
 
-	ticket := TicketWithArtist{}
-	err := db.Get(&ticket, `
-SELECT t.*, a.name AS artist_name FROM ticket t
-INNER JOIN artist a ON t.artist_id = a.id
-WHERE t.id = ? LIMIT 1`, ticketid)
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	//log.Printf("%+v", ticket)
+	cacheKey := fmt.Sprintf("ticket_page%s", ticketid)
+	v, found := gocache.Get(cacheKey)
+	var result string
+	var err error
+	if found {
+		result = v.(string)
+	} else {
+		fmt.Println("expired !!!")
 
-	variations := []VariationWithStocks{}
-	err = db.Select(&variations,
-		`SELECT id, name FROM variation WHERE ticket_id = ? ORDER BY id`, ticketid)
-	if err != nil {
-		http.Error(w, err.Error(), 500)
+		http.Error(w, errors.New("expired").Error(), 500)
 		return
-	}
-	//log.Printf("%+v", variations)
 
-	c, err := connectRedis()
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	for i := 0; i < len(variations); i++ {
-		v := &variations[i]
-
-		num, err := redis.Int(c.Do("SCARD", fmt.Sprintf("stock_%d", v.ID)))
-		v.Count = uint(num)
+		result, err = renderTicketTemplate(ticketid)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
 	}
-
-	recents, err := getRecentSold()
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-
-	seatMaps := make([]template.HTML, len(variations))
-	for i, variation := range variations {
-		key := fmt.Sprintf("seat_map_cahce_of_%d", variation.ID)
-		v, found := gocache.Get(key)
-		var seatCache SeatMapCache
-
-		if found {
-			seatCache = v.(SeatMapCache)
-			seatMaps[i] = seatCache.Content
-		} else {
-			fmt.Println("expired!!!")
-			if err = loadStocksToVariation(&variation); err != nil {
-				http.Error(w, err.Error(), 500)
-				return
-			}
-			seatCache := generateSeatMapCache(variation)
-			seatMaps[i] = seatCache.Content
-			gocache.Set(key, seatCache, 1*time.Second)
-		}
-	}
-
-	tmpl.ExecuteTemplate(w, "ticket.html", map[string]interface{}{
-		"recents":    recents,
-		"ticket":     ticket,
-		"seatMaps":   seatMaps,
-		"variations": variations,
-	})
+	w.Write([]byte(result))
 }
 
 func generateSeatMapCache(variation VariationWithStocks) SeatMapCache {
@@ -636,21 +587,91 @@ func loadStocksToVariation(v *VariationWithStocks) (error) {
 }
 
 func ticketGenerator() {
-	variations := []Variation{}
-	err := db.Select(&variations, "SELECT * FROM variation")
+	tickets := []TicketWithArtist{}
+	err := db.Select(&tickets, "SELECT t.*, a.name AS artist_name FROM ticket t INNER JOIN artist a ON t.artist_id = a.id ")
 	if err != nil {
 		panic(err)
 	}
-	ticker := time.NewTicker(time.Millisecond * 600)
+	for _, ticket := range tickets {
+		timer := time.After(100 * time.Millisecond)
+		<-timer
+		go ticketItemGenerator(ticket.ID)
+	}
+}
+
+func ticketItemGenerator(ticketid uint) {
+	var ticket TicketWithArtist
+	err := db.Get(&ticket, "SELECT t.*, a.name AS artist_name FROM ticket t INNER JOIN artist a ON t.artist_id = a.id WHERE t.id = ? LIMIT 1", ticketid)
+	if err != nil {
+		panic(err)
+	}
+	ticker := time.NewTicker(time.Millisecond * 200)
 	for _ = range ticker.C {
-		for _, variation := range variations {
-			var varWithStocks VariationWithStocks
-			varWithStocks.Variation = variation
-			key := fmt.Sprintf("seat_map_cahce_of_%d", variation.ID)
-			fmt.Printf("generate cache %s\n", key)
-			seatCache := generateSeatMapCache(varWithStocks)
-			gocache.Set(key, seatCache, 2*time.Second)
-		}
+		fmt.Printf("generate template: ticketid: %d\n", ticket.ID)
+		renderTicketTemplate(fmt.Sprintf("%d", ticket.ID))
 	}
 	ticker.Stop()
+}
+
+func renderTicketTemplate(ticketid string) (string, error) {
+	ticket := TicketWithArtist{}
+
+	cacheKey := fmt.Sprintf("ticket_page%s", ticketid)
+	err := db.Get(&ticket, `
+		SELECT t.*, a.name AS artist_name FROM ticket t
+		INNER JOIN artist a ON t.artist_id = a.id
+		WHERE t.id = ? LIMIT 1`, ticketid)
+	if err != nil {
+		return "", err
+	}
+	//log.Printf("%+v", ticket)
+
+	variations := []VariationWithStocks{}
+	err = db.Select(&variations,
+		`SELECT id, name FROM variation WHERE ticket_id = ? ORDER BY id`, ticketid)
+	if err != nil {
+		return "", err
+	}
+	//log.Printf("%+v", variations)
+
+	c, err := connectRedis()
+	if err != nil {
+		return "", err
+	}
+	for i := 0; i < len(variations); i++ {
+		v := &variations[i]
+
+		num, err := redis.Int(c.Do("SCARD", fmt.Sprintf("stock_%d", v.ID)))
+		v.Count = uint(num)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	recents, err := getRecentSold()
+	if err != nil {
+		return "", err
+	}
+
+	seatMaps := make([]template.HTML, len(variations))
+	for i, variation := range variations {
+
+		if err = loadStocksToVariation(&variation); err != nil {
+			return "", err
+		}
+		seatCache := generateSeatMapCache(variation)
+		seatMaps[i] = seatCache.Content
+	}
+
+	var buffer bytes.Buffer
+	tmpl.ExecuteTemplate(&buffer, "ticket.html", map[string]interface{}{
+		"recents":    recents,
+		"ticket":     ticket,
+		"seatMaps":   seatMaps,
+		"variations": variations,
+	})
+	result := buffer.String()
+	gocache.Set(cacheKey, result, 1*time.Second)
+	return result, nil
+
 }
